@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Departure — a computational artwork</title>
+<meta name="description" content="Departure: a generative media-art system that translates a piano composition into space, motion and light." />
+<style>
+  :root{
+    --bg:#07080a; --ink:#f2f4f7; --gray:#8a909a;
+    --blue:#9cc4e4; --cyan:#6fd6d0;
+    --line:rgba(242,244,247,.14); --ui-bg:rgba(10,12,15,.42);
+    --ease:cubic-bezier(.2,.7,.2,1);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Helvetica Neue",Arial,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;overflow:hidden;overscroll-behavior:none}
+  #stage{position:fixed;inset:0;display:grid;place-items:center;background:
+    radial-gradient(120% 120% at 50% 40%, #0b0d11 0%, #07080a 55%, #050608 100%)}
+  canvas{display:block;border-radius:2px;box-shadow:0 30px 120px rgba(0,0,0,.6)}
+
+  .veil{position:fixed;inset:0;display:grid;place-items:center;text-align:center;
+    padding:24px;transition:opacity .9s var(--ease);z-index:5}
+  .veil.hide{opacity:0;pointer-events:none}
+  .mark{font-weight:200;letter-spacing:.42em;text-transform:uppercase;
+    font-size:clamp(28px,7vw,72px);margin:0 0 0 .42em;line-height:1}
+  .sub{margin:18px 0 0;color:var(--gray);font-size:13px;letter-spacing:.28em;
+    text-transform:uppercase;font-weight:400}
+  .drop{margin-top:34px;display:inline-flex;align-items:center;gap:12px;
+    padding:14px 24px;border:1px solid var(--line);border-radius:999px;color:var(--ink);
+    cursor:pointer;font-size:13px;letter-spacing:.12em;text-transform:uppercase;
+    background:var(--ui-bg);backdrop-filter:blur(8px);
+    transition:border-color .4s var(--ease),transform .4s var(--ease),opacity .4s}
+  .drop:hover{border-color:rgba(156,196,228,.6);transform:translateY(-1px)}
+  .drop:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+  .drop[disabled]{opacity:.45;cursor:progress}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--cyan);box-shadow:0 0 14px var(--cyan)}
+  .alt{margin-top:18px;color:var(--gray);font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;background:none;border:none;cursor:pointer;
+    text-decoration:underline;text-underline-offset:4px;opacity:.8}
+  .alt:hover{color:var(--ink)}
+  .hint{margin-top:16px;color:#5b616b;font-size:11px;letter-spacing:.16em}
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+  .hud{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:10px;padding:8px 10px;z-index:6;
+    background:var(--ui-bg);border:1px solid var(--line);border-radius:14px;
+    backdrop-filter:blur(10px);transition:opacity .5s var(--ease),transform .5s var(--ease)}
+  .hud.idle{opacity:0;transform:translateX(-50%) translateY(10px);pointer-events:none}
+  .btn{appearance:none;background:transparent;border:1px solid transparent;color:var(--ink);
+    font:inherit;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    padding:9px 12px;border-radius:9px;cursor:pointer;display:flex;align-items:center;gap:8px;
+    transition:background .25s var(--ease),border-color .25s var(--ease),color .25s var(--ease)}
+  .btn:hover{background:rgba(255,255,255,.05)}
+  .btn:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  .btn[aria-pressed=true]{border-color:rgba(111,214,208,.5);color:var(--cyan)}
+  .btn.rec[aria-pressed=true]{border-color:rgba(228,120,120,.7);color:#e88}
+  .sep{width:1px;height:20px;background:var(--line)}
+  .ico{width:13px;height:13px;display:inline-block}
+  .meta{position:fixed;left:20px;bottom:22px;z-index:6;color:#5b616b;font-size:10px;
+    letter-spacing:.18em;text-transform:uppercase;transition:opacity .5s var(--ease)}
+  .meta.idle{opacity:0}.meta b{color:var(--gray);font-weight:500}
+  .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:7;
+    background:var(--ui-bg);border:1px solid var(--line);backdrop-filter:blur(10px);
+    color:var(--ink);font-size:12px;letter-spacing:.06em;padding:10px 16px;border-radius:10px;
+    opacity:0;pointer-events:none;transition:opacity .4s var(--ease)}
+  .toast.show{opacity:1}
+  @media (prefers-reduced-motion:reduce){.veil,.hud,.btn{transition:none}}
+  @media (max-width:640px){.mark{font-size:38px}.meta{display:none}}
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div class="veil" id="veil">
+    <div>
+      <h1 class="mark">Departure</h1>
+      <p class="sub">music as space · motion · light</p>
+      <button class="drop" id="dropBtn" disabled aria-label="Begin">
+        <span class="dot"></span> <span id="dropLbl">Preparing…</span>
+      </button>
+      <div><button class="alt" id="altBtn">use another track</button></div>
+      <input type="file" id="file" accept="audio/*" />
+      <p class="hint">click to begin · drag any audio file to replace</p>
+    </div>
+  </div>
+
+  <div class="hud idle" id="hud" aria-label="Playback controls">
+    <button class="btn" id="play" aria-pressed="false" title="Play / pause (space)">
+      <svg class="ico" id="playIco" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      <span id="playLbl">Play</span>
+    </button>
+    <span class="sep"></span>
+    <button class="btn" id="aspect" title="Toggle aspect ratio">16 : 9</button>
+    <span class="sep"></span>
+    <button class="btn rec" id="rec" aria-pressed="false" title="Record a webm video">
+      <svg class="ico" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg>
+      <span>Record</span>
+    </button>
+    <span class="sep"></span>
+    <button class="btn" id="full" title="Fullscreen (F)">Exhibit</button>
+  </div>
+
+  <div class="meta idle" id="meta"><b>Departure</b> &nbsp;·&nbsp; generative audiovisual system</div>
+  <div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/addons/p5.sound.min.js"></script>
+<script>
+/* =====================================================================
+   DEPARTURE — a computational artwork
+   Music structure -> a living field of motion & light. Single-file,
+   zero-build (GitHub Pages ready). Auto-loads audio/departure.mp3;
+   any dropped audio file replaces it. If a base64 track is embedded
+   (window.DEPARTURE_AUDIO_B64) it is used instead — no external file.
+   ===================================================================== */
+
+const DEFAULT_TRACK = 'audio/departure.mp3';
+
+const PALETTE = { bg:[7,8,10], ink:[242,244,247], cyan:[111,214,208], blue:[156,196,228] };
+const CFG = { fftBins:1024, smoothing:0.82, maxParticles:1100, streamers:44,
+              silenceLevel:0.012, fieldScale:0.0016, fieldDrift:0.00022 };
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if (REDUCED){ CFG.maxParticles=500; CFG.streamers=24; }
+
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lerpC=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
+
+/* -------------------------------------------------- AudioEngine */
+class AudioEngine {
+  constructor(){ this.fft=null; this.amp=null; this.sound=null; this.loaded=false;
+    this.url=null; this._revoke=false;
+    this.f={level:0,smoothLevel:0,centroid:0,bass:0,lowMid:0,mid:0,treble:0,bright:0}; }
+  load(blob,onReady){ this.loadURL(URL.createObjectURL(blob),onReady,true); }
+  loadURL(url,onReady,revoke){
+    if(this.sound){ try{this.sound.disconnect();this.sound.stop();}catch(e){} }
+    if(this.url && this._revoke) URL.revokeObjectURL(this.url);
+    this.url=url; this._revoke=!!revoke; this.loaded=false;
+    loadSound(url,
+      (s)=>{ this.sound=s;
+        this.fft=new p5.FFT(CFG.smoothing,CFG.fftBins); this.amp=new p5.Amplitude();
+        this.fft.setInput(s); this.amp.setInput(s); this.loaded=true; onReady&&onReady(); },
+      ()=> onReady&&onReady(new Error('load failed')),
+      ()=>{});
+  }
+  play(){ if(this.sound && !this.sound.isPlaying()) this.sound.play(); }
+  pause(){ if(this.sound && this.sound.isPlaying()) this.sound.pause(); }
+  get playing(){ return this.sound && this.sound.isPlaying(); }
+  onended(cb){ if(this.sound) this.sound.onended(cb); }
+  analyze(){
+    if(!this.loaded) return null;
+    const spec=this.fft.analyze(); const f=this.f;
+    f.level=this.amp.getLevel(); f.smoothLevel+=(f.level-f.smoothLevel)*0.12;
+    f.centroid=this.fft.getCentroid();
+    f.bass=this.fft.getEnergy('bass')/255;   f.lowMid=this.fft.getEnergy('lowMid')/255;
+    f.mid=this.fft.getEnergy('mid')/255;     f.treble=this.fft.getEnergy('treble')/255;
+    f.bright=clamp(Math.log10(Math.max(f.centroid,1))/4.2,0,1);
+    return spec;
+  }
+}
+
+/* -------------------------------------------------- OnsetDetector (spectral flux) */
+class OnsetDetector {
+  constructor(){ this.prev=null; this.hist=[]; this.histN=43; this.cool=0; }
+  push(spec){
+    if(!spec) return 0;
+    let flux=0;
+    if(this.prev){ for(let i=0;i<spec.length;i++){ const d=spec[i]-this.prev[i]; if(d>0) flux+=d; } flux/=spec.length; }
+    this.prev=spec.slice(0);
+    this.hist.push(flux); if(this.hist.length>this.histN) this.hist.shift();
+    const n=this.hist.length, mean=this.hist.reduce((a,b)=>a+b,0)/n;
+    const sd=Math.sqrt(this.hist.reduce((a,b)=>a+(b-mean)*(b-mean),0)/n)||1e-6;
+    this.cool=Math.max(0,this.cool-1);
+    const thr=mean+1.7*sd;
+    if(flux>thr && flux>0.35 && this.cool===0){ this.cool=7; return clamp((flux-thr)/(sd*3),0.15,1); }
+    return 0;
+  }
+}
+
+/* -------------------------------------------------- FlowField */
+class FlowField {
+  constructor(){ this.z=0; }
+  step(level){ this.z += CFG.fieldDrift*(1+level*2.4); }
+  angle(x,y){ return noise(x*CFG.fieldScale,y*CFG.fieldScale,this.z)*TWO_PI*2.2; }
+}
+
+/* -------------------------------------------------- Particle */
+class Particle {
+  constructor(x,y,str,tint){ this.x=x;this.y=y;this.vx=0;this.vy=0;
+    this.life=1; this.fade=random(0.0035,0.009)/(0.5+str);
+    this.size=random(0.7,2.4)+str*2.2; this.tint=tint; this.glow=0.5+str*0.6; }
+  update(field,f){
+    const a=field.angle(this.x,this.y);
+    const speed=0.4+f.smoothLevel*4.5+f.bass*1.4;
+    this.vx+=Math.cos(a)*0.18*speed; this.vy+=Math.sin(a)*0.18*speed;
+    const silent=f.smoothLevel<CFG.silenceLevel;
+    const damp=silent?0.86:0.93-f.treble*0.05;
+    this.vx*=damp; this.vy*=damp; this.x+=this.vx; this.y+=this.vy;
+    this.life-=this.fade*(silent?0.35:1);
+  }
+  draw(){ const c=this.tint,a=this.life*this.glow; noStroke();
+    fill(c[0],c[1],c[2],22*a); circle(this.x,this.y,this.size*3.2);
+    fill(c[0],c[1],c[2],150*a); circle(this.x,this.y,this.size); }
+  get dead(){ return this.life<=0; }
+}
+
+/* -------------------------------------------------- Streamer (flowing line) */
+class Streamer {
+  constructor(w,h){ this.reset(w,h); this.trail=[]; }
+  reset(w,h){ this.x=random(-w/2,w/2); this.y=random(-h/2,h/2); this.trail=[]; }
+  update(field,f,w,h){
+    const a=field.angle(this.x+w/2,this.y+h/2);
+    const sp=0.6+f.smoothLevel*3.2+f.treble*2.2;
+    this.x+=Math.cos(a)*sp; this.y+=Math.sin(a)*sp;
+    this.trail.push([this.x,this.y]);
+    const maxLen=26+Math.floor(f.treble*40);
+    if(this.trail.length>maxLen) this.trail.shift();
+    if(Math.abs(this.x)>w/2+40||Math.abs(this.y)>h/2+40) this.reset(w,h);
+  }
+  draw(f){
+    if(this.trail.length<2) return;
+    const tint=lerpC(PALETTE.blue,PALETTE.cyan,f.bright);
+    const op=0.05+f.treble*0.5; strokeWeight(0.6+f.treble*0.7); noFill();
+    beginShape();
+    for(let i=0;i<this.trail.length;i++){ const t=i/this.trail.length;
+      stroke(tint[0],tint[1],tint[2],120*op*t); vertex(this.trail[i][0],this.trail[i][1]); }
+    endShape();
+  }
+}
+
+/* -------------------------------------------------- Camera (breath) */
+class Camera {
+  constructor(){ this.zoom=1; this.tx=0; this.ty=0; this.pulse=0; }
+  update(f,onsetRate){
+    const target=1+f.smoothLevel*0.10+this.pulse*0.04;
+    this.zoom+=(target-this.zoom)*0.05; this.pulse*=0.92;
+    const dx=noise(frameCount*0.0009,11)-0.5, dy=noise(frameCount*0.0009,99)-0.5;
+    const amp=26*(0.4+onsetRate);
+    this.tx+=(dx*amp-this.tx)*0.02; this.ty+=(dy*amp-this.ty)*0.02;
+  }
+  kick(str){ this.pulse=Math.min(1,this.pulse+str); }
+}
+
+/* ====================================================== p5 sketch */
+let engine,onset,field,cam;
+let particles=[],streamers=[];
+let cnv,canvasEl,vignette;
+let W=960,H=540,aspectVertical=false;
+let onsetRate=0, armed=false, started=false;
+
+function setup(){
+  pixelDensity(Math.min(window.devicePixelRatio||1,2));
+  computeSize(); cnv=createCanvas(W,H); cnv.parent('stage'); canvasEl=cnv.elt;
+  noiseDetail(4,0.55);
+  engine=new AudioEngine(); onset=new OnsetDetector(); field=new FlowField(); cam=new Camera();
+  for(let i=0;i<CFG.streamers;i++) streamers.push(new Streamer(W,H));
+  buildVignette();
+  background(PALETTE.bg[0],PALETTE.bg[1],PALETTE.bg[2]);
+  wireUI();
+  loadDefault();
+}
+
+function loadDefault(){
+  const done=(err)=>{
+    const btn=document.getElementById('dropBtn'), lbl=document.getElementById('dropLbl');
+    if(!err && engine.loaded){ armed=true; btn.disabled=false; lbl.textContent='Begin Departure'; }
+    else { armed=false; btn.disabled=false; lbl.textContent='Load your audio';
+           document.getElementById('altBtn').style.display='none'; }
+  };
+  if(window.DEPARTURE_AUDIO_B64){
+    try{
+      const bin=atob(window.DEPARTURE_AUDIO_B64), len=bin.length, bytes=new Uint8Array(len);
+      for(let i=0;i<len;i++) bytes[i]=bin.charCodeAt(i);
+      engine.load(new Blob([bytes],{type:'audio/mpeg'}), done); return;
+    }catch(e){ /* fall through to relative file */ }
+  }
+  engine.loadURL(DEFAULT_TRACK, done, false);
+}
+
+function computeSize(){
+  const availW=window.innerWidth, availH=window.innerHeight;
+  const aspect=aspectVertical?9/16:16/9;
+  let w=availW,h=w/aspect; if(h>availH){ h=availH; w=h*aspect; }
+  W=Math.floor(w); H=Math.floor(h);
+}
+function windowResized(){ computeSize(); resizeCanvas(W,H); buildVignette(); }
+function buildVignette(){
+  vignette=createGraphics(W,H); const g=vignette.drawingContext;
+  const r=Math.max(W,H)*0.75;
+  const grad=g.createRadialGradient(W/2,H*0.46,r*0.18,W/2,H*0.46,r);
+  grad.addColorStop(0,'rgba(0,0,0,0)'); grad.addColorStop(1,'rgba(0,0,0,0.55)');
+  g.fillStyle=grad; g.fillRect(0,0,W,H);
+}
+
+function draw(){
+  const f=engine.f; const spec=engine.analyze(); const playing=engine.playing;
+  if(playing && spec){
+    const str=onset.push(spec);
+    onsetRate+=((playing?str:0)-onsetRate)*0.04;
+    if(str>0){
+      cam.kick(str*0.8);
+      const count=REDUCED?6+Math.floor(str*14):14+Math.floor(str*46);
+      const cx=(noise(frameCount*0.05,5)-0.5)*W*0.5, cy=(noise(frameCount*0.05,9)-0.5)*H*0.45;
+      const tint=lerpC(PALETTE.ink,PALETTE.cyan,clamp(f.bright*1.1,0,1));
+      for(let i=0;i<count && particles.length<CFG.maxParticles;i++){
+        const ang=random(TWO_PI),rad=random(2,40+str*70);
+        particles.push(new Particle(cx+Math.cos(ang)*rad,cy+Math.sin(ang)*rad,str,tint));
+      }
+    }
+  }
+  field.step(f.smoothLevel); cam.update(f,onsetRate);
+
+  const silent=f.smoothLevel<CFG.silenceLevel;
+  const fade=silent?0.045:0.10-f.smoothLevel*0.04;
+  blendMode(BLEND); noStroke();
+  fill(PALETTE.bg[0],PALETTE.bg[1],PALETTE.bg[2],255*fade); rect(0,0,W,H);
+
+  push(); translate(W/2+cam.tx,H/2+cam.ty); scale(cam.zoom);
+  blendMode(ADD);
+  for(const s of streamers){ s.update(field,f,W,H); s.draw(f); }
+  for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.update(field,f); p.draw(); if(p.dead) particles.splice(i,1); }
+  if(!started) idleField();
+  pop();
+  blendMode(BLEND); image(vignette,0,0,W,H);
+}
+
+let idle=[];
+function idleField(){
+  if(idle.length<70 && frameCount%3===0)
+    idle.push(new Particle(random(-W*0.3,W*0.3),random(-H*0.3,H*0.3),0.1,lerpC(PALETTE.blue,PALETTE.cyan,random())));
+  const fakeF={smoothLevel:0.02,bass:0.1,treble:0.05};
+  for(let i=idle.length-1;i>=0;i--){ const p=idle[i]; p.fade=0.002; p.update(field,fakeF); p.draw(); if(p.dead) idle.splice(i,1); }
+}
+
+/* ====================================================== UI */
+let recorder=null,recChunks=[],recStream=null;
+function $(id){ return document.getElementById(id); }
+
+function wireUI(){
+  const veil=$('veil'),hud=$('hud'),meta=$('meta'),fileInput=$('file');
+
+  function begin(){
+    if(!engine.loaded){ fileInput.click(); return; }   // not ready yet -> let them pick
+    userStartAudio();
+    started=true; idle=[]; particles=[];
+    veil.classList.add('hide'); hud.classList.remove('idle'); meta.classList.remove('idle');
+    engine.play(); reflectPlay(true);
+    engine.onended(()=>reflectPlay(false));
+  }
+  $('dropBtn').addEventListener('click',begin);
+  $('altBtn').addEventListener('click',()=>fileInput.click());
+
+  function replaceWith(file){
+    if(getAudioContext().state!=='running') userStartAudio();
+    toast('Reading audio…');
+    engine.load(file,(err)=>{
+      if(err){ toast('Could not decode that file. Try mp3/wav/m4a.'); return; }
+      started=true; idle=[]; particles=[];
+      veil.classList.add('hide'); hud.classList.remove('idle'); meta.classList.remove('idle');
+      engine.play(); reflectPlay(true); engine.onended(()=>reflectPlay(false));
+      toast('Now playing your track');
+    });
+  }
+  fileInput.addEventListener('change',e=>{ if(e.target.files[0]) replaceWith(e.target.files[0]); });
+  ['dragover','drop'].forEach(t=>document.addEventListener(t,e=>e.preventDefault()));
+  document.addEventListener('drop',e=>{ const file=e.dataTransfer.files[0]; if(file&&file.type.startsWith('audio')) replaceWith(file); });
+
+  const playBtn=$('play');
+  function reflectPlay(p){ playBtn.setAttribute('aria-pressed',p); $('playLbl').textContent=p?'Pause':'Play';
+    $('playIco').innerHTML=p?'<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>':'<path d="M8 5v14l11-7z"/>'; }
+  window.reflectPlay=reflectPlay;
+  playBtn.addEventListener('click',()=>{ if(!engine.loaded){ fileInput.click(); return; }
+    if(engine.playing){ engine.pause(); reflectPlay(false); } else { engine.play(); reflectPlay(true); } });
+
+  $('aspect').addEventListener('click',e=>{ aspectVertical=!aspectVertical;
+    e.target.textContent=aspectVertical?'9 : 16':'16 : 9'; windowResized(); });
+  $('full').addEventListener('click',()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); });
+  $('rec').addEventListener('click',e=>toggleRecord(e.currentTarget));
+
+  window.addEventListener('keydown',e=>{
+    if(e.key===' '){ e.preventDefault(); if(!started) begin(); else playBtn.click(); }
+    else if(e.key.toLowerCase()==='f'){ $('full').click(); }
+    else if(e.key.toLowerCase()==='h'){ hud.classList.toggle('idle'); }
+  });
+
+  let t; const wake=()=>{ hud.classList.remove('idle'); meta.classList.remove('idle');
+    clearTimeout(t); t=setTimeout(()=>{ if(engine.playing){ hud.classList.add('idle'); meta.classList.add('idle'); } },2600); };
+  ['mousemove','touchstart','keydown'].forEach(ev=>window.addEventListener(ev,wake));
+}
+
+function toggleRecord(btn){
+  if(!engine.loaded){ toast('Load a track before recording.'); return; }
+  if(recorder && recorder.state==='recording'){ recorder.stop(); btn.setAttribute('aria-pressed',false); btn.querySelector('span').textContent='Record'; return; }
+  try{
+    const vstream=canvasEl.captureStream(REDUCED?30:60);
+    let tracks=[...vstream.getVideoTracks()];
+    try{ const ctx=getAudioContext(); const dest=ctx.createMediaStreamDestination();
+      if(p5.soundOut && p5.soundOut.output) p5.soundOut.output.connect(dest);
+      tracks=tracks.concat(dest.stream.getAudioTracks()); }catch(err){}
+    recStream=new MediaStream(tracks);
+    const mime=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(m=>MediaRecorder.isTypeSupported(m))||'video/webm';
+    recorder=new MediaRecorder(recStream,{mimeType:mime,videoBitsPerSecond:12e6});
+    recChunks=[]; recorder.ondataavailable=e=>{ if(e.data.size) recChunks.push(e.data); };
+    recorder.onstop=()=>{ const blob=new Blob(recChunks,{type:'video/webm'}); const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download=`departure_${aspectVertical?'vertical':'wide'}_${Date.now()}.webm`; a.click(); URL.revokeObjectURL(a.href);
+      toast('Saved .webm — convert to mp4 for YouTube/TikTok.'); };
+    recorder.start(); btn.setAttribute('aria-pressed',true); btn.querySelector('span').textContent='Stop';
+    toast('Recording — press Stop when done.');
+  }catch(err){ toast('Recording is not supported in this browser.'); }
+}
+
+let toastT;
+function toast(msg){ const el=$('toast'); el.textContent=msg; el.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),2600); }
+</script>
+</body>
+</html>
